@@ -20,6 +20,7 @@ from   astropy.io import ascii
 from astropy.convolution import Gaussian1DKernel, convolve
 from   astropy.modeling import models, fitting
 from   astropy.modeling.models import Gaussian1D
+from scipy.stats import norm
 
 
 
@@ -31,6 +32,7 @@ def fit_line_flux(filename, line_freq, sub_channels, fix_x):
     if (line_freq > np.max(xaxis) or line_freq < np.min(xaxis)):
         print("line is not covered")
         return
+    print("now line is covered")
     line_pixel     = np.where(abs(xaxis- line_freq) == abs(xaxis- line_freq).min())[0][0]
     # Find the position of the desired line (element number)
     xaxis          = xaxis[line_pixel - sub_channels // 2 : line_pixel + sub_channels // 2]
@@ -47,7 +49,12 @@ def fit_line_flux(filename, line_freq, sub_channels, fix_x):
     if fix_x == False:
         peak_err, centre_err, width_err = fit_g.fit_info['param_cov'].diagonal()**0.5
     else:
-        peak_err, width_err = fit_g.fit_info['param_cov'].diagonal()**0.5
+        print(fit_g.fit_info)
+        if fit_g.fit_info['param_cov'].diagonal() is not None:
+            peak_err, width_err = fit_g.fit_info['param_cov'].diagonal()**0.5
+        else:
+            peak_err, width_err = 100, 100
+
     peak_err2   =  np.std(flux-g(xaxis))
     # Area calculation : http://physics.stackexchange.com/questions/196957/error-propagation-with-an-integral
     area      =  np.sqrt(2) * a * abs(c) * np.sqrt(np.pi) *1e-26 * 1e9 * u.W / u.m**2
@@ -62,7 +69,7 @@ def fit_line_flux(filename, line_freq, sub_channels, fix_x):
     print("area       :", area )
     print("area error :", area_err)
     print("area S/N   :", "%8.4f"%(area/area_err))
-
+    return a        #,area.value, 
 
 
 # --------- line plotting  
@@ -328,12 +335,12 @@ def subtract_self(frand, index, FTSobsid,  redshift,  width_of_sm_kernel,apod_wi
           ]))
     hdulist = fits.HDUList([hdu, table_hdu])
     hdulist.writeto('baselined/'+str(FTSobsid)+'_HR_spectrum_point_SSW_apod_baselined.fits', clobber=True)
-#   return
+#   return 
 
 #----------------- output fits files --------------------
 
-
-for i in range(0, 100):
+fluxes = np.array([]) 
+for i in range(0, 1000):
     frand    = uniform(510, 940 )
     FTSobsid = 1342238709
     z        = 1.325
@@ -345,7 +352,39 @@ for i in range(0, 100):
 #   subtract_self(frand, index, FTSobsid,  redshift,  width_of_sm_kernel,apod_width, Name, window):
 #              random freq, index, FTSobsid, redshift, width of sm, apod_width,  target name, set window width 
     print(frand)
-    fit_line_flux('baselined/'+str(FTSobsid)+'_HR_spectrum_point_SSW_apod_baselined.fits', frand , sub_channels, fix_x) 
-    fit_line_flux('baselined/'+str(FTSobsid)+'_HR_spectrum_point_SLW_apod_baselined.fits', frand , sub_channels, fix_x) 
+    flux = fit_line_flux('baselined/'+str(FTSobsid)+'_HR_spectrum_point_SSW_apod_baselined.fits', frand , sub_channels, fix_x) 
+    if flux is not None:
+        print('test OK')
+        fluxes = np.append(fluxes,flux)
+    flux = fit_line_flux('baselined/'+str(FTSobsid)+'_HR_spectrum_point_SLW_apod_baselined.fits', frand , sub_channels, fix_x)  
+    if flux is not None:
+        print('test OK')
+        fluxes = np.append(fluxes,flux)
 #                  
+
+# -------- mask data larger than 0.8 which are outerliers
+fluxes           = fluxes[np.where(fluxes < 0.8)]
+
+plt.clf()
+f, ax1           = plt.subplots(1, sharex=True, sharey=True)
+bins             = np.linspace(0, 1, 40)
+x                = (bins+0.015)[0:(40-1)] # calculate the x-axis (each point is in the middle of the bin, instead of the starting point of the bin)
+g_init           = models.Gaussian1D(amplitude=1, mean=0.3, stddev=0.1)   ## initialise parameters for the Gaussian fitting
+fit_g            = fitting.LevMarLSQFitter()
+g                = fit_g(g_init, x, n)
+n, bins, patches = ax1.hist(fluxes, bins, normed=1, facecolor='green', alpha=0.75)
+l                = ax1.plot(bins, g(bins), 'r--', linewidth=2,label='user fitting')
+ax1.legend(loc=7, borderaxespad=0.)
+plt.savefig('test_hist_Gaussian_fit.pdf')
+
+# - make statistics p-value test again to the masked fluxes array
+# - KS test D-statistics table:  www.mathematik.uni-kl.de/~schwaar/Exercises/Tabellen/table_kolmogorov.pdf
+# - p value less than 0.1, can not assume normal distribution
+
+ptest  = scipy.stats.mstats.normaltest(fluxes)
+kstest = stats.kstest(fluxes, 'norm')
+
+print(ptest)
+print(kstest)
+
 
